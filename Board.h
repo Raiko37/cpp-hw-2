@@ -1,9 +1,12 @@
 #pragma once
 
-#include <vector>
+#include <memory>
 #include <random>
 #include <utility>
+#include <vector>
+
 #include "Color.h"
+#include "Gem.h"
 
 class Board {
 public:
@@ -44,8 +47,7 @@ private:
     int width;
     int height;
 
-    // grid[y][x]
-    std::vector<std::vector<Color>> grid;
+    std::vector<std::vector<std::unique_ptr<Gem>>> grid;
 
     std::mt19937 rng;
 
@@ -53,4 +55,5 @@ private:
     bool isInside(int x, int y) const;
 
     Color getRandomGemColor();
+    int countConnectedSameColor(int startX, int startY) const;
 };

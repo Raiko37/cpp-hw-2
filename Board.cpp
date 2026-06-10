@@ -1,17 +1,21 @@
 #include "Board.h"
 
-#include <set>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <queue>
 
 Board::Board(int width, int height)
     : score(0),
     width(width),
     height(height),
-    grid(height, std::vector<Color>(width, Color::Empty)),
+    grid(height),
     rng(static_cast<unsigned>(
         std::chrono::steady_clock::now().time_since_epoch().count())) {
+
+    for (auto& row : grid) {
+        row.resize(width);
+    }
 
     initRandomNoMatches();
 }
@@ -37,11 +41,11 @@ bool Board::isInside(int x, int y) const {
 }
 
 Color Board::getGem(int x, int y) const {
-    if (!isInside(x, y)) {
+    if (!isInside(x, y) || !grid[y][x]) {
         return Color::Empty;
     }
 
-    return grid[y][x];
+    return grid[y][x]->getColor();
 }
 
 void Board::setGem(int x, int y, Color color) {
@@ -49,7 +53,12 @@ void Board::setGem(int x, int y, Color color) {
         return;
     }
 
-    grid[y][x] = color;
+    if (color == Color::Empty) {
+        grid[y][x].reset();
+        return;
+    }
+
+    grid[y][x] = std::make_unique<StandardGem>(color);
 }
 
 Color Board::getRandomGemColor() {
@@ -64,29 +73,28 @@ Color Board::getRandomGemColor() {
 void Board::initRandomNoMatches() {
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
-            grid[y][x] = getRandomGemColor();
-        }
-    }
+            std::vector<Color> colors;
 
-    while (true) {
-        auto matches = getMatches();
-
-        if (matches.empty()) {
-            break;
-        }
-
-        for (const auto& match : matches) {
-            int x = match.first;
-            int y = match.second;
-
-            Color current = grid[y][x];
-            Color newColor = current;
-
-            while (newColor == current) {
-                newColor = getRandomGemColor();
+            for (int i = 0; i < static_cast<int>(Color::Empty); ++i) {
+                colors.push_back(static_cast<Color>(i));
             }
 
-            grid[y][x] = newColor;
+            std::shuffle(colors.begin(), colors.end(), rng);
+
+            bool placed = false;
+
+            for (Color color : colors) {
+                setGem(x, y, color);
+
+                if (countConnectedSameColor(x, y) < 3) {
+                    placed = true;
+                    break;
+                }
+            }
+
+            if (!placed) {
+                setGem(x, y, getRandomGemColor());
+            }
         }
     }
 }
@@ -96,107 +104,148 @@ void Board::swapGems(int x1, int y1, int x2, int y2) {
         return;
     }
 
-    std::swap(grid[y1][x1], grid[y2][x2]);
+    grid[y1][x1].swap(grid[y2][x2]);
+}
+
+int Board::countConnectedSameColor(int startX, int startY) const {
+    Color color = getGem(startX, startY);
+
+    if (color == Color::Empty) {
+        return 0;
+    }
+
+    std::vector<std::vector<bool>> visited(
+        height,
+        std::vector<bool>(width, false)
+    );
+
+    std::queue<std::pair<int, int>> queue;
+    queue.push({ startX, startY });
+    visited[startY][startX] = true;
+
+    int count = 0;
+
+    const int dx[4] = { 1, -1, 0, 0 };
+    const int dy[4] = { 0, 0, 1, -1 };
+
+    while (!queue.empty()) {
+        auto current = queue.front();
+        queue.pop();
+
+        ++count;
+
+        for (int i = 0; i < 4; ++i) {
+            int nx = current.first + dx[i];
+            int ny = current.second + dy[i];
+
+            if (!isInside(nx, ny) || visited[ny][nx]) {
+                continue;
+            }
+
+            if (getGem(nx, ny) != color) {
+                continue;
+            }
+
+            visited[ny][nx] = true;
+            queue.push({ nx, ny });
+        }
+    }
+
+    return count;
 }
 
 std::vector<std::pair<int, int>> Board::getMatches() const {
-    std::set<std::pair<int, int>> uniqueMatches;
+    std::vector<std::pair<int, int>> matches;
 
-    // Горизонтальные матчи
-    for (int y = 0; y < height; ++y) {
-        int start = 0;
-
-        while (start < width) {
-            Color current = grid[y][start];
-
-            if (current == Color::Empty) {
-                ++start;
-                continue;
-            }
-
-            int end = start + 1;
-
-            while (end < width && grid[y][end] == current) {
-                ++end;
-            }
-
-            int length = end - start;
-
-            if (length >= 3) {
-                for (int x = start; x < end; ++x) {
-                    uniqueMatches.insert({ x, y });
-                }
-            }
-
-            start = end;
-        }
-    }
-
-    // Вертикальные матчи
-    for (int x = 0; x < width; ++x) {
-        int start = 0;
-
-        while (start < height) {
-            Color current = grid[start][x];
-
-            if (current == Color::Empty) {
-                ++start;
-                continue;
-            }
-
-            int end = start + 1;
-
-            while (end < height && grid[end][x] == current) {
-                ++end;
-            }
-
-            int length = end - start;
-
-            if (length >= 3) {
-                for (int y = start; y < end; ++y) {
-                    uniqueMatches.insert({ x, y });
-                }
-            }
-
-            start = end;
-        }
-    }
-
-    return std::vector<std::pair<int, int>>(
-        uniqueMatches.begin(),
-        uniqueMatches.end()
+    std::vector<std::vector<bool>> visited(
+        height,
+        std::vector<bool>(width, false)
     );
+
+    const int dx[4] = { 1, -1, 0, 0 };
+    const int dy[4] = { 0, 0, 1, -1 };
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if (visited[y][x]) {
+                continue;
+            }
+
+            Color color = getGem(x, y);
+
+            if (color == Color::Empty) {
+                visited[y][x] = true;
+                continue;
+            }
+
+            std::vector<std::pair<int, int>> component;
+            std::queue<std::pair<int, int>> queue;
+
+            queue.push({ x, y });
+            visited[y][x] = true;
+
+            while (!queue.empty()) {
+                auto current = queue.front();
+                queue.pop();
+
+                component.push_back(current);
+
+                for (int i = 0; i < 4; ++i) {
+                    int nx = current.first + dx[i];
+                    int ny = current.second + dy[i];
+
+                    if (!isInside(nx, ny) || visited[ny][nx]) {
+                        continue;
+                    }
+
+                    if (getGem(nx, ny) != color) {
+                        continue;
+                    }
+
+                    visited[ny][nx] = true;
+                    queue.push({ nx, ny });
+                }
+            }
+
+            if (component.size() >= 3) {
+                matches.insert(
+                    matches.end(),
+                    component.begin(),
+                    component.end()
+                );
+            }
+        }
+    }
+
+    return matches;
 }
 
 void Board::removeMatches(
     const std::vector<std::pair<int, int>>& matches) {
 
     for (const auto& match : matches) {
-        int x = match.first;
-        int y = match.second;
-
-        setGem(x, y, Color::Empty);
+        setGem(match.first, match.second, Color::Empty);
     }
 }
 
 void Board::applyGravity() {
     for (int x = 0; x < width; ++x) {
-        std::vector<Color> nonEmpty;
+        std::vector<std::unique_ptr<Gem>> nonEmpty;
 
         for (int y = height - 1; y >= 0; --y) {
-            if (grid[y][x] != Color::Empty) {
-                nonEmpty.push_back(grid[y][x]);
+            if (getGem(x, y) != Color::Empty) {
+                nonEmpty.push_back(std::move(grid[y][x]));
             }
         }
 
         for (int y = 0; y < height; ++y) {
-            grid[y][x] = Color::Empty;
+            grid[y][x].reset();
         }
 
         int writeY = height - 1;
 
-        for (Color color : nonEmpty) {
-            grid[writeY][x] = color;
+        for (auto& gem : nonEmpty) {
+            grid[writeY][x] = std::move(gem);
             --writeY;
         }
     }
@@ -205,8 +254,8 @@ void Board::applyGravity() {
 void Board::refillFromTop() {
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
-            if (grid[y][x] == Color::Empty) {
-                grid[y][x] = getRandomGemColor();
+            if (getGem(x, y) == Color::Empty) {
+                setGem(x, y, getRandomGemColor());
             }
         }
     }
@@ -238,6 +287,7 @@ bool Board::cascade() {
         processBonusesForDestroyed(matches, originalColors);
 
         applyGravity();
+
         refillFromTop();
     }
 
@@ -251,8 +301,10 @@ void Board::processBonusesForDestroyed(
     std::uniform_real_distribution<float> chanceDist(0.0f, 1.0f);
     std::uniform_int_distribution<int> bonusTypeDist(0, 1);
 
-    for (size_t i = 0; i < destroyedPositions.size(); ++i) {
-        if (chanceDist(rng) > 0.2f) {
+    size_t count = std::min(destroyedPositions.size(), originalColors.size());
+
+    for (size_t i = 0; i < count; ++i) {
+        if (originalColors[i] == Color::Empty || chanceDist(rng) > 0.2f) {
             continue;
         }
 
@@ -296,14 +348,20 @@ void Board::processBonusesForDestroyed(
         int tx = target.first;
         int ty = target.second;
 
-        int bonusType = bonusTypeDist(rng);
+        std::unique_ptr<Gem> bonus;
 
-        if (bonusType == 0) {
-            applyRecolorBonus(tx, ty, originalColors[i]);
+        if (bonusTypeDist(rng) == 0) {
+            bonus = std::make_unique<RecolorBonusGem>(originalColors[i]);
         }
         else {
-            applyBombBonus(tx, ty);
+            bonus = std::make_unique<BombBonusGem>(originalColors[i]);
         }
+
+        grid[ty][tx] = std::move(bonus);
+
+        std::unique_ptr<Gem> activeBonus = std::move(grid[ty][tx]);
+
+        activeBonus->activate(*this, tx, ty);
     }
 }
 
@@ -312,7 +370,7 @@ void Board::applyRecolorBonus(
     int targetY,
     Color sourceColor) {
 
-    if (!isInside(targetX, targetY)) {
+    if (!isInside(targetX, targetY) || sourceColor == Color::Empty) {
         return;
     }
 
@@ -340,6 +398,10 @@ void Board::applyRecolorBonus(
                 continue;
             }
 
+            if (getGem(nx, ny) == Color::Empty) {
+                continue;
+            }
+
             possibleCells.push_back({ nx, ny });
         }
     }
@@ -349,38 +411,45 @@ void Board::applyRecolorBonus(
     int recolorCount = std::min(2, static_cast<int>(possibleCells.size()));
 
     for (int i = 0; i < recolorCount; ++i) {
-        int x = possibleCells[i].first;
-        int y = possibleCells[i].second;
-
-        setGem(x, y, sourceColor);
+        setGem(possibleCells[i].first, possibleCells[i].second, sourceColor);
     }
 }
 
 void Board::applyBombBonus(int bombX, int bombY) {
-    std::vector<std::pair<int, int>> allPositions;
+    std::vector<std::pair<int, int>> positions;
+
+    if (isInside(bombX, bombY)) {
+        positions.push_back({ bombX, bombY });
+    }
+
+    std::vector<std::pair<int, int>> candidates;
 
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
-            allPositions.push_back({ x, y });
+            if (x == bombX && y == bombY) {
+                continue;
+            }
+
+            if (getGem(x, y) == Color::Empty) {
+                continue;
+            }
+
+            candidates.push_back({ x, y });
         }
     }
 
-    std::shuffle(allPositions.begin(), allPositions.end(), rng);
+    std::shuffle(candidates.begin(), candidates.end(), rng);
 
-    bool bombIncluded = false;
+    int needCount = std::min(
+        5 - static_cast<int>(positions.size()),
+        static_cast<int>(candidates.size())
+    );
 
-    for (int i = 0; i < 5 && i < static_cast<int>(allPositions.size()); ++i) {
-        int x = allPositions[i].first;
-        int y = allPositions[i].second;
-
-        setGem(x, y, Color::Empty);
-
-        if (x == bombX && y == bombY) {
-            bombIncluded = true;
-        }
+    for (int i = 0; i < needCount; ++i) {
+        positions.push_back(candidates[i]);
     }
 
-    if (!bombIncluded && isInside(bombX, bombY)) {
-        setGem(bombX, bombY, Color::Empty);
+    for (const auto& pos : positions) {
+        setGem(pos.first, pos.second, Color::Empty);
     }
 }
